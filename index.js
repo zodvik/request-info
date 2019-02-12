@@ -3,10 +3,10 @@ const defaultConfig = require('./lib/defaultConfig')
 const PullRequestBodyChecker = require('./lib/PullRequestBodyChecker')
 const IssueBodyChecker = require('./lib/IssueBodyChecker')
 const getConfig = require('probot-config')
+const setStatus = require('./lib/setStatus')
 
 module.exports = app => {
-  app.on('installation_repositories.added', learningLabWelcome)
-  app.on(['pull_request.opened', 'issues.opened'], receive)
+  app.on(['pull_request.opened', 'pull_request.edited', 'issues.opened'], receive)
   async function receive (context) {
     let title
     let body
@@ -23,25 +23,40 @@ module.exports = app => {
     }
 
     try {
-      const config = await getConfig(context, 'config.yml', defaultConfig)
+      let config = await getConfig(context, 'config.yml')
+      if (!config) {
+        config = defaultConfig
+      }
 
       if (!config.requestInfoOn[eventSrc]) {
         return
       }
 
-      if (config.requestInfoDefaultTitles) {
-        if (config.requestInfoDefaultTitles.includes(title.toLowerCase())) {
+      let message = ""
+      if (config.requestInfoDefaultTitles && config.requestInfoDefaultTitles.includes(title.toLowerCase())) {
           badTitle = true
-        }
+          message = "title contains default value"
+      }
+
+      if (title.length < config.minTitleLength) {
+          badTitle = true
+          message = "title should be descriptive"
+      }
+
+      if (body.length < config.minBodyLength) {
+          badBody = true
+          message = "body should be descriptive"
       }
 
       if (eventSrc === 'pullRequest') {
         if (config.checkPullRequestTemplate && !(await PullRequestBodyChecker.isBodyValid(body, context))) {
           badBody = true
+          message = "body template should be filled"
         }
       } else if (eventSrc === 'issue') {
         if (config.checkIssueTemplate && !(await IssueBodyChecker.isBodyValid(body, context))) {
           badBody = true
+          message = "issue template should be filled"
         }
       }
 
@@ -49,16 +64,16 @@ module.exports = app => {
       if (config.requestInfoUserstoExclude) {
         if (config.requestInfoUserstoExclude.includes(user.login)) {
           notExcludedUser = false
+          message = "whitelisted user"
         }
       }
-      if ((!body || badTitle || badBody) && notExcludedUser) {
+
+      const invalidTitleBody = (!body || badTitle || badBody) && notExcludedUser
+      if (invalidTitleBody && eventSrc === 'issue') {
         const comment = getComment(config.requestInfoReplyComment, defaultConfig.requestInfoReplyComment)
         context.github.issues.createComment(context.issue({body: comment}))
-
-        if (config.requestInfoLabelToAdd) {
-          // Add label if there is one listed in the yaml file
-          context.github.issues.addLabels(context.issue({labels: [config.requestInfoLabelToAdd]}))
-        }
+      } else if (eventSrc === 'pullRequest') {
+        setStatus(context, invalidTitleBody, message)
       }
     } catch (err) {
       if (err.code !== 404) {
@@ -67,17 +82,4 @@ module.exports = app => {
     }
   }
 
-  // Say hi!
-  const NAME = 'introduction-to-github-apps'
-  async function learningLabWelcome (context) {
-    const includes = context.payload.repositories_added.some(r => r.name === NAME)
-    if (!includes) return
-
-    return context.github.issues.createComment({
-      owner: context.payload.installation.account.login,
-      repo: NAME,
-      number: 2,
-      body: 'Well done! You successfully installed the request info app.\n\n_disclaimer_ If you use this app in future repos, you won\'t get a message like this. This is just for Learning Lab!'
-    })
-  }
 }
