@@ -23,7 +23,7 @@ module.exports = app => {
     }
 
     try {
-      let config = await getConfig(context, 'config.yml')
+      let config = await getConfig(context, 'request-info.yml')
       if (!config) {
         config = defaultConfig
       }
